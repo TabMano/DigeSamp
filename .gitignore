@@ -1,0 +1,18 @@
+# JUCE - you clone this locally, but it doesn't belong in your repo.
+# The GitHub Actions workflow clones its own copy fresh on every build.
+/JUCE/
+
+# CMake build output
+/build/
+/build-*/
+
+# Installer build output
+installer/VST3/
+installer/*.exe
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/

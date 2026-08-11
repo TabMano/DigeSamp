@@ -1,0 +1,37 @@
+name: Build Windows VST3
+
+# Run this manually from the "Actions" tab on GitHub, or automatically
+# whenever you push to main. Builds on an actual Windows machine (hosted by
+# GitHub, free for public repos) using Microsoft's compiler - no local
+# Windows install or cross-compiler needed.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Check out this project
+        uses: actions/checkout@v4
+
+      - name: Check out JUCE (as ./JUCE, next to CMakeLists.txt)
+        uses: actions/checkout@v4
+        with:
+          repository: juce-framework/JUCE
+          ref: 8.0.4
+          path: JUCE
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Upload the built VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: BpmKeyDetector-VST3-Windows
+          path: build/BpmKeyDetector_artefacts/Release/VST3/**
