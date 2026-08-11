@@ -30,8 +30,10 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
-      - name: Upload the built VST3
+      - name: Upload Windows builds
         uses: actions/upload-artifact@v4
         with:
-          name: BpmKeyDetector-VST3-Windows
-          path: build/BpmKeyDetector_artefacts/Release/VST3/**
+          name: BpmKeyDetector-Windows
+          path: |
+            build/BpmKeyDetector_artefacts/Release/VST3/**
+            build/BpmKeyDetector_artefacts/Release/Standalone/**
