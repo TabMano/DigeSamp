@@ -21,7 +21,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: juce-framework/JUCE
-          ref: 8.0.4
+          ref: 8.0.15
           path: JUCE
 
       - name: Configure
