@@ -17,11 +17,7 @@ namespace
         DBG (line);
 
         auto logFile = getDigeSampLogFile();
-        logFile.appendText (line + juce::newLine,
-                            false,
-                            false,
-                            "\n",
-                            "\r");
+        logFile.appendText (line + juce::newLine);
     }
 }
 
