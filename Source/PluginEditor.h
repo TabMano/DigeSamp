@@ -4,7 +4,6 @@
 #include "PluginProcessor.h"
 
 class BpmKeyDetectorEditor : public juce::AudioProcessorEditor,
-                              public juce::FileDragAndDropTarget,
                               private juce::Timer
 {
 public:
@@ -14,21 +13,18 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
 
-    bool isInterestedInFileDrag (const juce::StringArray& files) override;
-    void filesDropped (const juce::StringArray& files, int x, int y) override;
-    void fileDragEnter (const juce::StringArray& files, int x, int y) override;
-    void fileDragExit (const juce::StringArray& files) override;
-
 private:
     void timerCallback() override;
+    void openFileChooser();
 
     BpmKeyDetectorProcessor& processor;
 
-    juce::Label dropZoneLabel;
-    juce::Label resultLabel; // shows "128.0 BPM  ·  F# Minor" or an error/status message
+    juce::Label statusLabel;   // shows chosen filename or "No file selected"
+    juce::TextButton browseButton { "Choose File..." };
+    juce::Label resultLabel;   // shows "128.0 BPM  |  F# Minor" or an error message
     juce::Label creditLabel;
 
-    bool isDragOver = false;
+    std::unique_ptr<juce::FileChooser> fileChooser;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BpmKeyDetectorEditor)
 };

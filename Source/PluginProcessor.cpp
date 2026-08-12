@@ -80,15 +80,25 @@ void BpmKeyDetectorProcessor::AnalysisThread::run()
             }
             else
             {
+                // Cap how much we read to bound worst-case memory (a 10-min
+                // stereo file at 44.1kHz would be ~210MB just for the raw
+                // read buffer). 3 minutes covers the vast majority of music
+                // and loop content; the segment-voting BPM algorithm doesn't
+                // need the whole track anyway. Longer files just get their
+                // first 3 minutes analyzed rather than being rejected -
+                // representative-chunk sampling for very long files is a
+                // reasonable next step if that ever matters in practice.
+                constexpr juce::int64 maxSecondsToRead = 180;
                 juce::AudioBuffer<float> buffer (
                     (int) reader->numChannels,
                     (int) juce::jmin<juce::int64> (reader->lengthInSamples,
-                                                     (juce::int64) reader->sampleRate * 60 * 10)); // cap at 10 min
+                                                     (juce::int64) reader->sampleRate * maxSecondsToRead));
 
                 reader->read (&buffer, 0, buffer.getNumSamples(), 0, true, true);
 
                 if (! threadShouldExit())
-                    result = owner.analyzer.analyze (buffer, reader->sampleRate);
+                    result = owner.analyzer.analyze (buffer, reader->sampleRate,
+                                                       [this] { return threadShouldExit(); });
             }
 
             {

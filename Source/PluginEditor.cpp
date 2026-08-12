@@ -1,37 +1,33 @@
 #include "PluginEditor.h"
 
-namespace
-{
-    const juce::StringArray acceptedExtensions = {
-        ".wav", ".wave", ".aif", ".aiff", ".flac", ".ogg",
-        ".mp3", ".m4a", ".aac", ".caf", ".wma"
-    };
-
-    bool hasAcceptedExtension (const juce::String& path)
-    {
-        auto lower = path.toLowerCase();
-        for (auto& ext : acceptedExtensions)
-            if (lower.endsWith (ext))
-                return true;
-        return false;
-    }
-}
-
 BpmKeyDetectorEditor::BpmKeyDetectorEditor (BpmKeyDetectorProcessor& p)
     : AudioProcessorEditor (&p), processor (p)
 {
-    setSize (360, 180);
+    setSize (360, 200);
 
-    dropZoneLabel.setText ("Drop an audio file here", juce::dontSendNotification);
-    dropZoneLabel.setJustificationType (juce::Justification::centred);
-    dropZoneLabel.setFont (juce::Font (16.0f));
-    dropZoneLabel.setColour (juce::Label::backgroundColourId, juce::Colour (0xff2a2a2e));
-    dropZoneLabel.setColour (juce::Label::outlineColourId, juce::Colour (0xff4a4a50));
-    addAndMakeVisible (dropZoneLabel);
+    // Explicit text colours matter here: some hosts don't hand plugin editor
+    // windows the same default LookAndFeel colours a standalone app gets,
+    // and relying on the default (near-black) text colour on our dark
+    // background can render as invisible - exactly the blank window you saw.
+    const auto lightText = juce::Colour (0xffe8e8ec);
 
-    resultLabel.setText ({}, juce::dontSendNotification);
+    statusLabel.setText ("No file selected", juce::dontSendNotification);
+    statusLabel.setJustificationType (juce::Justification::centred);
+    statusLabel.setFont (juce::Font (14.0f));
+    statusLabel.setColour (juce::Label::textColourId, lightText);
+    statusLabel.setColour (juce::Label::backgroundColourId, juce::Colour (0xff2a2a2e));
+    statusLabel.setColour (juce::Label::outlineColourId, juce::Colour (0xff4a4a50));
+    addAndMakeVisible (statusLabel);
+
+    browseButton.onClick = [this] { openFileChooser(); };
+    browseButton.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff3a3a40));
+    browseButton.setColour (juce::TextButton::textColourOffId, lightText);
+    addAndMakeVisible (browseButton);
+
+    resultLabel.setText ("Ready", juce::dontSendNotification);
     resultLabel.setJustificationType (juce::Justification::centred);
     resultLabel.setFont (juce::Font (22.0f, juce::Font::bold));
+    resultLabel.setColour (juce::Label::textColourId, lightText);
     addAndMakeVisible (resultLabel);
 
     creditLabel.setText ("made by FCK", juce::dontSendNotification);
@@ -51,15 +47,16 @@ BpmKeyDetectorEditor::~BpmKeyDetectorEditor()
 void BpmKeyDetectorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (juce::Colour (0xff1e1e22));
-
-    g.setColour (isDragOver ? juce::Colours::limegreen : juce::Colours::transparentBlack);
-    g.drawRect (dropZoneLabel.getBounds(), 2);
 }
 
 void BpmKeyDetectorEditor::resized()
 {
     auto area = getLocalBounds().reduced (16);
-    dropZoneLabel.setBounds (area.removeFromTop (80));
+
+    statusLabel.setBounds (area.removeFromTop (28));
+    area.removeFromTop (10);
+
+    browseButton.setBounds (area.removeFromTop (30));
     area.removeFromTop (16);
 
     auto creditRow = area.removeFromBottom (16);
@@ -68,61 +65,39 @@ void BpmKeyDetectorEditor::resized()
     resultLabel.setBounds (area);
 }
 
-bool BpmKeyDetectorEditor::isInterestedInFileDrag (const juce::StringArray& files)
+void BpmKeyDetectorEditor::openFileChooser()
 {
-    for (auto& f : files)
-        if (hasAcceptedExtension (f))
-            return true;
-    return false;
-}
+    fileChooser = std::make_unique<juce::FileChooser> (
+        "Choose an audio file to analyze",
+        juce::File(),
+        "*.wav;*.wave;*.aif;*.aiff;*.flac;*.ogg;*.mp3;*.m4a;*.aac;*.caf;*.wma");
 
-void BpmKeyDetectorEditor::fileDragEnter (const juce::StringArray&, int, int)
-{
-    isDragOver = true;
-    repaint();
-}
+    auto flags = juce::FileBrowserComponent::openMode
+               | juce::FileBrowserComponent::canSelectFiles;
 
-void BpmKeyDetectorEditor::fileDragExit (const juce::StringArray&)
-{
-    isDragOver = false;
-    repaint();
-}
-
-void BpmKeyDetectorEditor::filesDropped (const juce::StringArray& files, int, int)
-{
-    isDragOver = false;
-
-    for (auto& f : files)
+    fileChooser->launchAsync (flags, [this] (const juce::FileChooser& fc)
     {
-        if (hasAcceptedExtension (f))
-        {
-            dropZoneLabel.setText ("Analyzing " + juce::File (f).getFileName() + "...",
-                                    juce::dontSendNotification);
-            resultLabel.setText ({}, juce::dontSendNotification);
-            processor.analyzeFile (juce::File (f));
-            break; // only analyze the first accepted file
-        }
-    }
+        auto file = fc.getResult();
+        if (file == juce::File())
+            return; // user cancelled - stay in whatever state we were in
 
-    repaint();
+        statusLabel.setText (file.getFileName(), juce::dontSendNotification);
+        resultLabel.setText ("Analyzing...", juce::dontSendNotification);
+        processor.analyzeFile (file);
+    });
 }
 
 void BpmKeyDetectorEditor::timerCallback()
 {
     if (processor.isAnalyzing())
-        return;
+        return; // resultLabel already shows "Analyzing..." from the click handler above
 
     auto result = processor.getLastResult();
 
     if (result.success)
-    {
-        dropZoneLabel.setText ("Drop an audio file here", juce::dontSendNotification);
-        resultLabel.setText (juce::String (result.bpm, 1) + " BPM   |   " + result.keyName,
+        resultLabel.setText (juce::String (result.bpm, 1) + " BPM  -  " + result.keyName,
                               juce::dontSendNotification);
-    }
     else if (result.errorMessage.isNotEmpty())
-    {
-        dropZoneLabel.setText ("Drop an audio file here", juce::dontSendNotification);
         resultLabel.setText (result.errorMessage, juce::dontSendNotification);
-    }
+    // else: no file has been analyzed yet - leave the initial "Ready" text as-is
 }

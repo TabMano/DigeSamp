@@ -4,7 +4,6 @@
 
 namespace
 {
-    // Krumhansl-Schmuckler key profiles (major and minor), classic 1990 values.
     constexpr std::array<float, 12> majorProfile = {
         6.35f, 2.23f, 3.48f, 2.33f, 4.38f, 4.09f, 2.52f, 5.19f, 2.39f, 3.66f, 2.29f, 2.88f
     };
@@ -33,9 +32,15 @@ namespace
         auto denom = std::sqrt (denA * denB);
         return denom > 1.0e-9f ? num / denom : 0.0f;
     }
+
+    inline bool isCancelled (const std::function<bool()>& shouldCancel)
+    {
+        return shouldCancel && shouldCancel();
+    }
 }
 
-AnalysisResult AudioAnalyzer::analyze (const juce::AudioBuffer<float>& buffer, double sampleRate)
+AnalysisResult AudioAnalyzer::analyze (const juce::AudioBuffer<float>& buffer, double sampleRate,
+                                        const std::function<bool()>& shouldCancel)
 {
     AnalysisResult result;
 
@@ -47,14 +52,21 @@ AnalysisResult AudioAnalyzer::analyze (const juce::AudioBuffer<float>& buffer, d
 
     auto mono = toMono (buffer);
 
-    auto onsetEnvelope = computeOnsetEnvelope (mono);
-    auto frameRate = sampleRate / (double) onsetHopSize;
+    if (isCancelled (shouldCancel)) { result.cancelled = true; result.errorMessage = "Cancelled"; return result; }
 
-    auto [bpm, bpmConf] = estimateBpmRobust (onsetEnvelope, frameRate);
+    auto onsetEnvelope = computeOnsetEnvelope (mono, shouldCancel);
+    if (isCancelled (shouldCancel)) { result.cancelled = true; result.errorMessage = "Cancelled"; return result; }
+
+    auto frameRate = sampleRate / (double) onsetHopSize;
+    auto [bpm, bpmConf] = estimateBpmRobust (onsetEnvelope, frameRate, shouldCancel);
+    if (isCancelled (shouldCancel)) { result.cancelled = true; result.errorMessage = "Cancelled"; return result; }
+
     result.bpm = bpm;
     result.bpmConfidence = bpmConf;
 
-    auto [keyName, keyConf] = estimateKey (mono, sampleRate);
+    auto [keyName, keyConf] = estimateKey (mono, sampleRate, shouldCancel);
+    if (isCancelled (shouldCancel)) { result.cancelled = true; result.errorMessage = "Cancelled"; return result; }
+
     result.keyName = keyName;
     result.keyConfidence = keyConf;
 
@@ -87,7 +99,8 @@ std::vector<float> AudioAnalyzer::toMono (const juce::AudioBuffer<float>& buffer
 
 // ============================== BPM ==============================
 
-std::vector<float> AudioAnalyzer::computeOnsetEnvelope (const std::vector<float>& mono)
+std::vector<float> AudioAnalyzer::computeOnsetEnvelope (const std::vector<float>& mono,
+                                                         const std::function<bool()>& shouldCancel)
 {
     juce::dsp::FFT fft (onsetFftOrder);
     juce::dsp::WindowingFunction<float> window (onsetFftSize, juce::dsp::WindowingFunction<float>::hann);
@@ -101,6 +114,9 @@ std::vector<float> AudioAnalyzer::computeOnsetEnvelope (const std::vector<float>
     size_t pos = 0;
     while (pos + static_cast<size_t> (onsetFftSize) <= mono.size())
     {
+        if (isCancelled (shouldCancel))
+            break; // caller re-checks and discards the partial result
+
         std::fill (fftData.begin(), fftData.end(), 0.0f);
         std::copy (mono.begin() + static_cast<long> (pos),
                    mono.begin() + static_cast<long> (pos) + onsetFftSize,
@@ -126,7 +142,8 @@ std::vector<float> AudioAnalyzer::computeOnsetEnvelope (const std::vector<float>
 }
 
 AudioAnalyzer::TempoEstimate AudioAnalyzer::estimateTempoInRange (
-    const std::vector<float>& onsetEnvelope, double frameRate, int startFrame, int endFrame)
+    const std::vector<float>& onsetEnvelope, double frameRate, int startFrame, int endFrame,
+    const std::function<bool()>& shouldCancel)
 {
     TempoEstimate result;
 
@@ -150,12 +167,13 @@ AudioAnalyzer::TempoEstimate AudioAnalyzer::estimateTempoInRange (
     if (minLag >= maxLag)
         return result;
 
-    // Autocorrelate a bit past maxLag so harmonics (2x, 3x the candidate lag)
-    // are available to reinforce the fundamental period below.
     int acMaxLag = juce::jmin (length - 1, maxLag * 3 + 1);
     std::vector<double> ac ((size_t) acMaxLag + 1, 0.0);
     for (int lag = minLag; lag <= acMaxLag; ++lag)
     {
+        if (isCancelled (shouldCancel))
+            return result; // bail with the default (zero) estimate
+
         double sum = 0.0;
         int count = length - lag;
         for (int i = 0; i < count; ++i)
@@ -168,9 +186,6 @@ AudioAnalyzer::TempoEstimate AudioAnalyzer::estimateTempoInRange (
 
     for (int lag = minLag; lag <= maxLag; ++lag)
     {
-        // Harmonic reinforcement: a true tempo period's multiples also show
-        // up as autocorrelation peaks, so summing them biases selection
-        // toward the fundamental instead of an octave-doubled/halved lag.
         double score = ac[(size_t) lag];
         if (2 * lag <= acMaxLag) score += 0.6 * ac[(size_t) (2 * lag)];
         if (3 * lag <= acMaxLag) score += 0.35 * ac[(size_t) (3 * lag)];
@@ -191,7 +206,8 @@ AudioAnalyzer::TempoEstimate AudioAnalyzer::estimateTempoInRange (
     return result;
 }
 
-std::pair<double, float> AudioAnalyzer::estimateBpmRobust (const std::vector<float>& onsetEnvelope, double frameRate)
+std::pair<double, float> AudioAnalyzer::estimateBpmRobust (const std::vector<float>& onsetEnvelope, double frameRate,
+                                                             const std::function<bool()>& shouldCancel)
 {
     if (onsetEnvelope.size() < 8 || frameRate <= 0.0)
         return { 0.0, 0.0f };
@@ -201,7 +217,7 @@ std::pair<double, float> AudioAnalyzer::estimateBpmRobust (const std::vector<flo
 
     if (totalSeconds <= segmentSeconds)
     {
-        auto e = estimateTempoInRange (onsetEnvelope, frameRate, 0, (int) onsetEnvelope.size());
+        auto e = estimateTempoInRange (onsetEnvelope, frameRate, 0, (int) onsetEnvelope.size(), shouldCancel);
         if (e.bpm > 0.0)
             estimates.push_back (e);
     }
@@ -212,17 +228,18 @@ std::pair<double, float> AudioAnalyzer::estimateBpmRobust (const std::vector<flo
 
         for (int start = 0; start + segFrames <= (int) onsetEnvelope.size(); start += hopFrames)
         {
-            auto e = estimateTempoInRange (onsetEnvelope, frameRate, start, start + segFrames);
+            if (isCancelled (shouldCancel))
+                return { 0.0, 0.0f };
+
+            auto e = estimateTempoInRange (onsetEnvelope, frameRate, start, start + segFrames, shouldCancel);
             if (e.bpm > 0.0)
                 estimates.push_back (e);
         }
 
-        // Make sure the tail of the track (which the loop above may not
-        // land on exactly) still gets a vote.
         int lastStart = (int) onsetEnvelope.size() - segFrames;
-        if (lastStart > 0)
+        if (lastStart > 0 && ! isCancelled (shouldCancel))
         {
-            auto e = estimateTempoInRange (onsetEnvelope, frameRate, lastStart, (int) onsetEnvelope.size());
+            auto e = estimateTempoInRange (onsetEnvelope, frameRate, lastStart, (int) onsetEnvelope.size(), shouldCancel);
             if (e.bpm > 0.0)
                 estimates.push_back (e);
         }
@@ -242,8 +259,6 @@ std::pair<double, float> AudioAnalyzer::estimateBpmRobust (const std::vector<flo
         totalWeight = (double) estimates.size();
     }
 
-    // Proximity-cluster the per-segment estimates (tolerant of half/double
-    // tempo confusion between segments) and let the strongest cluster win.
     double bestClusterWeight = -1.0;
     double bestClusterBpm = estimates.front().bpm;
 
@@ -279,13 +294,14 @@ std::pair<double, float> AudioAnalyzer::estimateBpmRobust (const std::vector<flo
 
 // ============================== KEY ==============================
 
-std::array<float, 12> AudioAnalyzer::computeChromaVector (const std::vector<float>& mono, double sampleRate)
+std::array<float, 12> AudioAnalyzer::computeChromaVector (const std::vector<float>& mono, double sampleRate,
+                                                           const std::function<bool()>& shouldCancel)
 {
     std::array<float, 12> chroma {};
     chroma.fill (0.0f);
 
     if ((int) mono.size() < keyFftSize)
-        return chroma; // too short to resolve pitch classes reliably at this FFT size
+        return chroma;
 
     juce::dsp::FFT fft (keyFftOrder);
     juce::dsp::WindowingFunction<float> window (keyFftSize, juce::dsp::WindowingFunction<float>::hann);
@@ -298,6 +314,9 @@ std::array<float, 12> AudioAnalyzer::computeChromaVector (const std::vector<floa
 
     while (pos + static_cast<size_t> (keyFftSize) <= mono.size())
     {
+        if (isCancelled (shouldCancel))
+            break;
+
         std::fill (fftData.begin(), fftData.end(), 0.0f);
         std::copy (mono.begin() + static_cast<long> (pos),
                    mono.begin() + static_cast<long> (pos) + keyFftSize,
@@ -316,9 +335,6 @@ std::array<float, 12> AudioAnalyzer::computeChromaVector (const std::vector<floa
             int pitchClass = ((int) std::lround (midi)) % 12;
             if (pitchClass < 0) pitchClass += 12;
 
-            // Log compression: a handful of loud transient bins can no
-            // longer swamp the sustained harmonic content that actually
-            // carries the key.
             chroma[static_cast<size_t> (pitchClass)] += (float) std::log1p ((double) fftData[static_cast<size_t> (bin)]);
         }
 
@@ -333,9 +349,13 @@ std::array<float, 12> AudioAnalyzer::computeChromaVector (const std::vector<floa
     return chroma;
 }
 
-std::pair<juce::String, float> AudioAnalyzer::estimateKey (const std::vector<float>& mono, double sampleRate)
+std::pair<juce::String, float> AudioAnalyzer::estimateKey (const std::vector<float>& mono, double sampleRate,
+                                                            const std::function<bool()>& shouldCancel)
 {
-    auto chroma = computeChromaVector (mono, sampleRate);
+    auto chroma = computeChromaVector (mono, sampleRate, shouldCancel);
+
+    if (isCancelled (shouldCancel))
+        return { "Unknown", 0.0f };
 
     bool allZero = std::all_of (chroma.begin(), chroma.end(), [] (float c) { return c == 0.0f; });
     if (allZero)
@@ -364,9 +384,6 @@ std::pair<juce::String, float> AudioAnalyzer::estimateKey (const std::vector<flo
     const auto& best = candidates.front();
     float margin = candidates.size() > 1 ? (best.score - candidates[1].score) : 0.0f;
 
-    // Blend absolute correlation strength with how clearly it beat the
-    // runner-up key - a high score that's barely ahead of a close second
-    // (e.g. relative major/minor confusion) shouldn't read as high confidence.
     float confidence = juce::jlimit (0.0f, 1.0f,
         0.5f * juce::jlimit (0.0f, 1.0f, best.score) + 0.5f * juce::jlimit (0.0f, 1.0f, margin * 4.0f));
 

@@ -5,6 +5,7 @@
 #include <vector>
 #include <array>
 #include <utility>
+#include <functional>
 
 /** Result of analyzing one audio buffer. */
 struct AnalysisResult
@@ -12,54 +13,50 @@ struct AnalysisResult
     double bpm = 0.0;
     juce::String keyName = "Unknown";
 
-    // Rough 0-1 confidence scores, not just raw numbers, so the UI (and you)
-    // can tell "clearly 128 BPM in F# minor" apart from "best guess, weak signal".
     float bpmConfidence = 0.0f;
     float keyConfidence = 0.0f;
 
     bool success = false;
-    juce::String errorMessage; // set when analysis could not produce a usable result
+    bool cancelled = false;    // true if shouldCancel() fired mid-analysis
+    juce::String errorMessage;
 };
 
 /**
     Offline analyzer estimating tempo and key from a full audio buffer.
 
-    Robustness strategy:
-      - BPM: the track is split into overlapping ~20s segments, each scored
-        independently with harmonic-reinforced autocorrelation (so the
-        fundamental tempo period wins over its octave doubles/halves), then
-        all segment estimates vote via proximity clustering. A track with
-        one weak/ambient section no longer drags the whole estimate off,
-        because consistent segments elsewhere outvote it.
-      - Key: chroma is computed with a much larger FFT than onset detection
-        needs (8192 vs 2048 samples), giving enough low-frequency resolution
-        to place bass notes in the correct pitch class, and magnitudes are
-        log-compressed so a handful of loud transients can't swamp sustained
-        harmonic content.
-
-    Still not a substitute for a dedicated MIR library (essentia/aubio), but
-    meaningfully harder to fool than a single-shot autocorrelation + chroma
-    pass.
+    Cancellation: analyze() and its helpers accept an optional shouldCancel
+    callback, checked periodically between (not inside) FFT frames and
+    autocorrelation lags. This exists so a plugin shutting down mid-analysis
+    can bail out in roughly one frame's worth of work instead of running the
+    full pass to completion - important because the background thread that
+    calls this is joined (Thread::stopThread) during plugin destruction, and
+    a host waiting on that join is a host that appears frozen.
 */
 class AudioAnalyzer
 {
 public:
-    AnalysisResult analyze (const juce::AudioBuffer<float>& buffer, double sampleRate);
+    AnalysisResult analyze (const juce::AudioBuffer<float>& buffer, double sampleRate,
+                             const std::function<bool()>& shouldCancel = {});
 
 private:
     std::vector<float> toMono (const juce::AudioBuffer<float>& buffer);
 
     // --- BPM ---
-    std::vector<float> computeOnsetEnvelope (const std::vector<float>& mono);
+    std::vector<float> computeOnsetEnvelope (const std::vector<float>& mono,
+                                              const std::function<bool()>& shouldCancel);
 
     struct TempoEstimate { double bpm = 0.0; float score = 0.0f; };
     TempoEstimate estimateTempoInRange (const std::vector<float>& onsetEnvelope, double frameRate,
-                                         int startFrame, int endFrame);
-    std::pair<double, float> estimateBpmRobust (const std::vector<float>& onsetEnvelope, double frameRate);
+                                         int startFrame, int endFrame,
+                                         const std::function<bool()>& shouldCancel);
+    std::pair<double, float> estimateBpmRobust (const std::vector<float>& onsetEnvelope, double frameRate,
+                                                 const std::function<bool()>& shouldCancel);
 
     // --- Key ---
-    std::pair<juce::String, float> estimateKey (const std::vector<float>& mono, double sampleRate);
-    std::array<float, 12> computeChromaVector (const std::vector<float>& mono, double sampleRate);
+    std::pair<juce::String, float> estimateKey (const std::vector<float>& mono, double sampleRate,
+                                                 const std::function<bool()>& shouldCancel);
+    std::array<float, 12> computeChromaVector (const std::vector<float>& mono, double sampleRate,
+                                                const std::function<bool()>& shouldCancel);
 
     // Onset detection: prioritizes time resolution.
     static constexpr int onsetFftOrder = 11;         // 2048 samples

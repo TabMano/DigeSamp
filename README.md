@@ -38,9 +38,57 @@ Both remain classic, well-documented MIR techniques — meaningfully more
 robust than a single-shot pass, but still not a substitute for a dedicated
 library like essentia or aubio if you need production-grade accuracy.
 
+## Choosing a file: button, not drag-and-drop
+
+Earlier versions of this UI used drag-and-drop. That was switched to a plain
+"Choose File..." button because drag-and-drop relies on Windows' OLE/COM
+drop-target registration when the plugin window is created - and that
+codepath is a known weak spot under Wine, especially for a plugin window
+embedded inside a host (like FL Studio) rather than a standalone top-level
+window. If you saw the plugin window open but freeze with nothing rendering
+inside it, that registration call stalling was the likely cause. The file
+picker button sidesteps it entirely.
+
+**If you still see a freeze after this change**, it's worth isolating
+whether the problem is Wine-wide or specific to how FL Studio hosts VST3
+plugins: build the Standalone target too (already included -
+`FORMATS VST3 Standalone` in `CMakeLists.txt`) and run it directly via
+`wine build/BpmKeyDetector_artefacts/Release/Standalone/"BPM & Key Detector.exe"`.
+If the Standalone app also freezes, the issue is upstream of FL Studio
+(Wine + JUCE GUI generally). If it opens fine there but still freezes
+specifically inside FL, that points at FL's VST3 hosting/embedding
+behavior under Wine rather than the plugin's own GUI code.
+
 ## The UI
 
-Deliberately minimal, because this is a detection tool, not a mixing tool:
+## Shutdown safety, memory, and UI states
+
+A few issues surfaced during real-world testing (freezing FL Studio on
+close) and got fixed:
+
+- **Cancellable analysis.** `AudioAnalyzer::analyze()` now accepts an
+  optional `shouldCancel` callback, checked between FFT frames and
+  autocorrelation lags throughout the pipeline. The background thread wires
+  this to its own `threadShouldExit()`, so when the plugin is being torn
+  down mid-analysis, the analysis bails out within roughly one frame's
+  worth of work instead of running to completion. This matters because the
+  processor's destructor calls `analysisThread.stopThread(4000)`, which
+  blocks until the thread actually exits - without cancellation, a
+  long-running analysis on a big file could make that block for its full
+  duration, and a host waiting on that is a host that looks frozen.
+- **Lower memory cap.** File reads are capped at 3 minutes of audio (down
+  from 10) - plenty for BPM/key detection, since the segment-voting BPM
+  algorithm doesn't need the whole track anyway, and it keeps the worst-case
+  read buffer around 63MB instead of ~210MB for a long stereo file.
+  Longer files just get their first 3 minutes analyzed rather than being
+  rejected; sampling a representative excerpt instead of always the head of
+  the file would be a reasonable next step if that ever matters in practice.
+- **Explicit UI states.** The result label now always shows one of: "Ready"
+  (nothing analyzed yet), "Analyzing..." (background thread running), a
+  result like "128.0 BPM - F# Minor", or an error message - never blank or
+  ambiguous about what's currently happening.
+
+Deliberately minimal otherwise, because this is a detection tool, not a mixing tool:
 a drop zone and one result line. Drop a file, wait a moment, read the BPM
 and key. That's the whole interface.
 
