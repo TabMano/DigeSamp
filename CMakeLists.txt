@@ -14,7 +14,7 @@ juce_add_plugin(BpmKeyDetector
     PLUGIN_MANUFACTURER_CODE KRTS
     PLUGIN_CODE Bpmk
     FORMATS VST3 Standalone
-    PRODUCT_NAME "BPM & Key Detector"
+    PRODUCT_NAME "DigeSamp"
     IS_SYNTH FALSE
     NEEDS_MIDI_INPUT FALSE
     NEEDS_MIDI_OUTPUT FALSE
