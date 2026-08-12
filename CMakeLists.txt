@@ -10,8 +10,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 add_subdirectory(JUCE)
 
 juce_add_plugin(BpmKeyDetector
-    COMPANY_NAME "YourName"
-    PLUGIN_MANUFACTURER_CODE Ohko
+    COMPANY_NAME "FourCornersK"
+    PLUGIN_MANUFACTURER_CODE KRTS
     PLUGIN_CODE Bpmk
     FORMATS VST3 Standalone
     PRODUCT_NAME "BPM & Key Detector"
